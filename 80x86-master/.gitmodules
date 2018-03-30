@@ -1,0 +1,6 @@
+[submodule "googletest"]
+	path = vendor/googletest
+	url = ../googletest.git
+[submodule "vendor/altera-jtag"]
+	path = vendor/altera-jtag
+	url = ../jtag.git

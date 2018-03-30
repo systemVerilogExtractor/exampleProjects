@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+
+# Copyright Jamie Iles, 2017
+#
+# This file is part of s80x86.
+#
+# s80x86 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# s80x86 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with s80x86.  If not, see <http://www.gnu.org/licenses/>.
+
+import argparse
+import os
+import re
+import sys
+import time
+
+from collections import namedtuple, defaultdict
+from xml.dom import minidom
+from xml.etree.ElementTree import Element, SubElement, tostring
+
+def gather_coverage(coverage_root):
+    coverage = defaultdict(int)
+    for root, dirs, files in os.walk(coverage_root):
+        for f in files:
+            if not re.match(r'microcode_.*\.mcov', f):
+                continue
+            with open(os.path.join(root, f)) as covfile:
+                lines = covfile.readlines()
+            for l in lines:
+                loc, count = l.split(':')
+                coverage[int(loc, 16)] += int(count, 16)
+
+    return coverage
+
+def coverage_dict(microcode, coverage_root):
+    cd = {}
+
+    coverage = gather_coverage(coverage_root)
+    with open(microcode) as microcode_bin:
+        lines = microcode_bin.readlines()
+
+    addr = 0
+    for linenum, l in enumerate(lines):
+        if l.startswith('//'):
+            continue
+        if l.startswith('@'):
+            addr = int(l.split()[1], 16)
+            continue
+        cd[linenum] = (coverage[addr], l)
+        addr += 1
+
+    return cd
+
+def report(microcode, coverage_root):
+    cd = coverage_dict(microcode, coverage_root)
+
+    data = []
+    for linenum, (count, line) in cd.items():
+        data.append('%s %8d %s' % ('*' if count == 0 else ' ',
+                                   count, line))
+    return ''.join(data)
+
+def report_xml(microcode, coverage_root, source_root):
+    cd = coverage_dict(microcode, coverage_root)
+
+    uncovered = len(list(filter(lambda x: x[0] == 0, cd.values())))
+    num_lines = len(cd.keys())
+    line_rate = (num_lines - uncovered) / num_lines
+
+    coverage = Element('coverage', attrib={
+                       'branch-rate': '0.0',
+                       'complexity': '0.0',
+                       'line-rate': str(line_rate),
+                       'timestamp': str(int(time.time())),
+                       'version': 'verilator-cobertura-1',
+                       })
+    sources = SubElement(coverage, 'sources')
+    source = SubElement(sources, 'source')
+    source.text = source_root
+    packages = SubElement(coverage, 'packages')
+    package = SubElement(packages, 'package', attrib={
+                         'name': 'microcode',
+                         'branch-rate': '0.0',
+                         'complexity': '0.0',
+                         'line-rate': str(line_rate),
+                         })
+    classes = SubElement(package, 'classes')
+    f = SubElement(classes, 'class', attrib={
+                    'filename': os.path.relpath(microcode, source_root),
+                    'name': os.path.basename(microcode).replace('.', '_'),
+                    'line-rate': str(line_rate),
+                    'branch-rate': '0.0',
+                    'complexity': '0.0',
+                    })
+    lines_elem = SubElement(f, 'lines')
+    for linenum, (count, _) in cd.items():
+        l = SubElement(lines_elem, 'line',
+                    attrib={'hits': str(count), 'number': str(linenum), 'branch': 'false'})
+
+    return minidom.parseString(tostring(coverage)).toprettyxml(indent="  ").replace('<?xml version="1.0" ?>', '<?xml version="1.0" ?>\n<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-03.dtd">')
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('microcode_bin')
+    parser.add_argument('coverage_root')
+    parser.add_argument('source_root')
+    parser.add_argument('--xml', action='store_true')
+    parser.add_argument('--output')
+    args = parser.parse_args()
+
+    if args.xml:
+        data = report_xml(args.microcode_bin, args.coverage_root, args.source_root)
+    else:
+        data = report(args.microcode_bin, args.coverage_root)
+
+    if args.output:
+        with open(args.output, 'w') as f:
+            f.write(data)
+    else:
+        print(data, end='')

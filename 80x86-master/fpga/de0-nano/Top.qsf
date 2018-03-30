@@ -1,0 +1,117 @@
+# Copyright Jamie Iles, 2017
+#
+# This file is part of s80x86.
+#
+# s80x86 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# s80x86 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with s80x86.  If not, see <http://www.gnu.org/licenses/>.
+
+set_global_assignment -name NUM_PARALLEL_PROCESSORS @NPROCS@
+set_global_assignment -name USE_CONFIGURATION_DEVICE OFF
+
+set_global_assignment -name SMART_RECOMPILE ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT EXTRA
+set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name CYCLONEII_OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name SYNTH_TIMING_DRIVEN_SYNTHESIS ON
+set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
+set_global_assignment -name MUX_RESTRUCTURE OFF
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVCMOS"
+
+set_location_assignment PIN_R8 -to clk
+set_location_assignment PIN_J15 -to rst_in_n
+
+# SDRAM
+set_location_assignment PIN_P2 -to s_addr[0]
+set_location_assignment PIN_N5 -to s_addr[1]
+set_location_assignment PIN_N6 -to s_addr[2]
+set_location_assignment PIN_M8 -to s_addr[3]
+set_location_assignment PIN_P8 -to s_addr[4]
+set_location_assignment PIN_T7 -to s_addr[5]
+set_location_assignment PIN_N8 -to s_addr[6]
+set_location_assignment PIN_T6 -to s_addr[7]
+set_location_assignment PIN_R1 -to s_addr[8]
+set_location_assignment PIN_P1 -to s_addr[9]
+set_location_assignment PIN_N2 -to s_addr[10]
+set_location_assignment PIN_N1 -to s_addr[11]
+set_location_assignment PIN_L4 -to s_addr[12]
+set_location_assignment PIN_G2 -to s_data[0]
+set_location_assignment PIN_G1 -to s_data[1]
+set_location_assignment PIN_L8 -to s_data[2]
+set_location_assignment PIN_K5 -to s_data[3]
+set_location_assignment PIN_K2 -to s_data[4]
+set_location_assignment PIN_J2 -to s_data[5]
+set_location_assignment PIN_J1 -to s_data[6]
+set_location_assignment PIN_R7 -to s_data[7]
+set_location_assignment PIN_T4 -to s_data[8]
+set_location_assignment PIN_T2 -to s_data[9]
+set_location_assignment PIN_T3 -to s_data[10]
+set_location_assignment PIN_R3 -to s_data[11]
+set_location_assignment PIN_R5 -to s_data[12]
+set_location_assignment PIN_P3 -to s_data[13]
+set_location_assignment PIN_N3 -to s_data[14]
+set_location_assignment PIN_K1 -to s_data[15]
+set_location_assignment PIN_P6 -to s_cs_n
+set_location_assignment PIN_L7 -to s_clken
+set_location_assignment PIN_L1 -to s_cas_n
+set_location_assignment PIN_R6 -to s_bytesel[0]
+set_location_assignment PIN_T5 -to s_bytesel[1]
+set_location_assignment PIN_L2 -to s_ras_n
+set_location_assignment PIN_C2 -to s_wr_en
+set_location_assignment PIN_M7 -to s_banksel[0]
+set_location_assignment PIN_M6 -to s_banksel[1]
+set_location_assignment PIN_R4 -to sdr_clk
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to sdr_clk
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_ras_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_cas_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_wr_en
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_bytesel
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to s_data
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_addr
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to s_banksel
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to s_*
+
+# IO
+set_location_assignment PIN_A15 -to leds[0]
+set_location_assignment PIN_A13 -to leds[1]
+set_location_assignment PIN_B13 -to leds[2]
+set_location_assignment PIN_A11 -to leds[3]
+set_location_assignment PIN_D1 -to leds[4]
+set_location_assignment PIN_F3 -to leds[5]
+set_location_assignment PIN_B1 -to leds[6]
+set_location_assignment PIN_L3 -to leds[7]
+
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to leds[*]
+
+# UART
+set_location_assignment PIN_C3 -to uart_tx
+set_location_assignment PIN_A3 -to uart_rx
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to uart_tx
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to uart_rx
+
+# SPI
+set_location_assignment PIN_D12 -to spi_mosi
+set_location_assignment PIN_B12 -to spi_miso
+set_location_assignment PIN_A12 -to spi_ncs
+set_location_assignment PIN_D11 -to spi_sclk
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to spi_mosi
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to spi_ncs
+set_instance_assignment -name CURRENT_STRENGTH_NEW 2MA -to spi_sclk

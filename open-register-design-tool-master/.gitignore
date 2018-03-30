@@ -1,0 +1,38 @@
+*.class
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.ear
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+
+# eclipse stuff
+/bin/
+/info/output/
+/.classpath
+/.project
+# allow shadow copy of generated antlr output so packages work w/ eclipse build
+/src/ordt/parse/jspec/
+/src/ordt/parse/parameters/
+/src/ordt/parse/systemrdl/
+
+# keep user-specific MyDebugController out of repo
+/src/ordt/extract/MyDebugController.java
+
+# vim temp
+*.sw?
+
+# test output dirs, user settings
+/test/**/output/
+/test/scripts/test.setup
+/rdl/
+
+# gradle stuff
+/.gradle/
+!/gradle/wrapper/*.jar
+/build/

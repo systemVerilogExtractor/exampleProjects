@@ -1,0 +1,16 @@
+.gradle
+*.pyc
+*.log
+generated/
+build/
+bin/
+svparse_files.yml
+
+# Visual Studio Code
+.vscode/*.VC.db
+
+# Eclipse
+.cache-main
+.classpath
+.project
+.settings/

@@ -1,0 +1,18 @@
+#g++ -fPIC -DQUESTA -g -W -shared -std=c++11  \
+#    -lncurses \
+#    -I/tools/model/qs10.1c_1/questasim/include \
+#    uvm_boat_anchor.cpp -o uvm_boat_anchor.so
+
+rm -rf work
+vlib work
+
+vlog -sv \
+     $UVM_HOME/src/uvm.sv \
+     +incdir+$UVM_HOME/src \
+     uvm_boat_anchor_demo.sv
+
+vsim -c \
+     -l run.log \
+     uvm_boat_anchor_demo \
+     -sv_lib $UVM_HOME/lib/uvm_dpi64 \
+     -do "run -all"

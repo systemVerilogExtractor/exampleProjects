@@ -1,0 +1,45 @@
+#!/usr/bin/env python
+
+# Copyright Jamie Iles, 2017
+#
+# This file is part of s80x86.
+#
+# s80x86 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# s80x86 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with s80x86.  If not, see <http://www.gnu.org/licenses/>.
+
+import distorm3
+import re
+import sys
+
+LOC_RE = re.compile(r'\[(?P<CS>[0-9a-f]+):(?P<IP>[0-9a-f]+)\]')
+
+with open(sys.argv[1]) as log:
+    for line in log:
+        m = LOC_RE.match(line)
+        if not m:
+            print line,
+            continue
+
+        try:
+            loc, instr_bytes = line.split(' ', 1)
+        except Exception:
+            print line,
+            continue
+
+        ip = int(m.groupdict()['IP'], 16)
+        hexbuf = instr_bytes.strip().replace(' ', '').decode('hex')
+        try:
+            _, __,instruction, ___ = distorm3.Decode(ip, hexbuf, distorm3.Decode16Bits)[0]
+        except Exception:
+            print instr_bytes
+        print loc, instruction.lower()

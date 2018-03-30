@@ -1,0 +1,5 @@
+<project>
+  <logLevel>DEBUG</logLevel>
+  <feature>serialize_to_xml</feature>
+  <feature>complexity</feature>
+</project>

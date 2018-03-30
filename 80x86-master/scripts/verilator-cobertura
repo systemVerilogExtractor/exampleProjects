@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+
+# Copyright Jamie Iles, 2017
+#
+# This file is part of s80x86.
+#
+# s80x86 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# s80x86 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with s80x86.  If not, see <http://www.gnu.org/licenses/>.
+
+import argparse
+import sys
+import os.path
+import time
+
+from collections import namedtuple, defaultdict
+from xml.dom import minidom
+from xml.etree.ElementTree import Element, SubElement, tostring
+
+def get_coverage(filename):
+    CoveragePoint = namedtuple('CoveragePoint', ['file', 'line', 'count'])
+    FIELD_SPLIT = '\x01'
+    KEY_VALUE_SPLIT = '\x02'
+
+    def parse_point(point, count):
+        filename = None
+        line = None
+
+        for pair in point:
+            if not KEY_VALUE_SPLIT in pair:
+                continue
+            key, value = pair.split(KEY_VALUE_SPLIT)
+            if key == 'f':
+                filename = value
+            if key == 'l':
+                line = value
+
+        if not filename or not line:
+            return None
+
+        return CoveragePoint(filename, line, int(count))
+
+    def parse_coverage(filename):
+        with open(filename) as coverage:
+            coverage_lines = filter(lambda x: x.startswith('C'), coverage.readlines())
+
+        coverage = defaultdict(lambda: defaultdict(int))
+
+        for l in coverage_lines:
+            line_type, data, count = l.split()
+            entry_dict = data.replace("'", "").split(FIELD_SPLIT)
+            point = parse_point(entry_dict, count)
+            if point:
+                coverage[point.file][point.line] += point.count
+
+        return coverage
+
+    return parse_coverage(filename)
+
+def verilator_to_cobertura(coverage_info):
+    line_rates = {}
+    global_line_rate = 0.0
+
+    total_lines = 0.0
+    covered_lines = 0.0
+    for filename, lines in coverage_info.items():
+        file_covered_lines = 0.0
+        for line, count in lines.items():
+            total_lines += 1
+            if count > 0:
+                file_covered_lines += 1
+                covered_lines += 1
+        line_rates[filename] = file_covered_lines / len(lines)
+    global_line_rate = 0.0 if not total_lines else covered_lines / total_lines
+
+    coverage = Element('coverage', attrib={
+                       'branch-rate': '0.0',
+                       'complexity': '0.0',
+                       'line-rate': str(global_line_rate),
+                       'timestamp': str(int(time.time())),
+                       'version': 'verilator-cobertura-1',
+                       })
+    sources = SubElement(coverage, 'sources')
+    source = SubElement(sources, 'source')
+    source.text = args.source_root
+    packages = SubElement(coverage, 'packages')
+    package = SubElement(packages, 'package', attrib={
+                         'name': 'verilator',
+                         'branch-rate': '0.0',
+                         'complexity': '0.0',
+                         'line-rate': str(global_line_rate),
+                         })
+    classes = SubElement(package, 'classes')
+    for filename, lines in coverage_info.items():
+        f = SubElement(classes, 'class', attrib={
+                       'filename': os.path.relpath(filename, args.source_root),
+                       'name': os.path.basename(filename).replace('.', '_'),
+                       'line-rate': str(line_rates[filename]),
+                       'branch-rate': '0.0',
+                       'complexity': '0.0',
+                       })
+        lines_elem = SubElement(f, 'lines')
+        for line in sorted(lines.keys(), key=lambda x: int(x)):
+            count = lines[line]
+            # Maximum of 31-bits so that cobertura plugin doesn't get sad.
+            # With toggles etc this can get pretty large.
+            if count > 0x7fffffff:
+                count = 0x7fffffff
+            l = SubElement(lines_elem, 'line',
+                        attrib={'hits': str(count), 'number': str(line), 'branch': 'false'})
+
+    return minidom.parseString(tostring(coverage)).toprettyxml(indent="  ").replace('<?xml version="1.0" ?>', '<?xml version="1.0" ?>\n<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-03.dtd">')
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--source-root', default='/')
+parser.add_argument('--output', default='-')
+parser.add_argument('coverage_file')
+args = parser.parse_args()
+
+coverage_info = get_coverage(args.coverage_file)
+report = verilator_to_cobertura(coverage_info)
+
+if args.output == '-':
+    print report
+else:
+    with open(args.output, 'w') as outfile:
+        outfile.write(report)

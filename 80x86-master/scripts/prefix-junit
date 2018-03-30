@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+
+# Copyright Jamie Iles, 2017
+#
+# This file is part of s80x86.
+#
+# s80x86 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# s80x86 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with s80x86.  If not, see <http://www.gnu.org/licenses/>.
+
+"""
+Add a prefix to all test/class names in a junit xml file.
+
+Used when the test program is run multiple times with the same test names but
+different global environments and all of the xml files will be reported
+together.  For example, with s8086, the instruction unit tests are run once
+with the software simulator and once with the RTL simulation.  Because google
+test isn't great at type *and* value parameterized tests, the tests are run
+twice with a different EmulateFixture.
+"""
+import argparse
+import lxml.etree as ET
+
+PREFIX = "Simulation."
+
+TRANSFORM_TEMPLATE = """\
+<?xml version="1.0" encoding="utf-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+
+<xsl:template match="@* | node()">
+<xsl:copy>
+<xsl:apply-templates select="@*|node()"/>
+</xsl:copy>
+</xsl:template>
+
+<xsl:template match="//@name">
+<xsl:attribute name="name">
+<xsl:value-of select="concat('{PREFIX}', .)"/>
+</xsl:attribute>
+</xsl:template>
+
+<xsl:template match="//@classname">
+<xsl:attribute name="classname">
+<xsl:value-of select="concat('{PREFIX}', .)"/>
+</xsl:attribute>
+</xsl:template>
+
+</xsl:stylesheet>
+"""
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('prefix')
+    parser.add_argument('input')
+    parser.add_argument('output')
+    args = parser.parse_args()
+
+    with open(args.input) as infile:
+        xml = ET.parse(infile)
+        xslt = ET.fromstring(TRANSFORM_TEMPLATE.format(PREFIX=args.prefix))
+        transform = ET.XSLT(xslt)
+
+    newdom = transform(xml)
+
+    with open(args.output, 'w') as outfile:
+        outfile.write(ET.tostring(newdom, pretty_print=True))

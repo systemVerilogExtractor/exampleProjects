@@ -1,0 +1,79 @@
+
+This is a collection of tools, scripts, verilog, etc, for experimenting
+with the Xilinx Zynq SoC FPGA, particularly around using a commandline
+workflow and avoiding the IPI (IP Integrator) workflow.
+
+An earlier version that attempted to make use of IPI from the commandline
+lives in the deprecated-ipi branch.
+
+Warning:  This is very much a work in progress.
+
+Projects
+--------
+zybo-hdmi            - display a test pattern ZYBO board's HDMI output
+zybo-hdmi-axi        - same, but add an axi slave to adjust the pattern
+zybo-simple-io       - AXI access to the switches, buttons, and LEDs
+...
+
+Repository Layout
+-----------------
+hdl/...              - verilog, systemverilog, and xdc sources
+build/...            - makefiles and tcl scripts
+
+Generated Files
+---------------
+sim/${name}-vsim/... - where Verilator intermediates are generated
+sim/${name}-xsim/... - where Xilinx Xsim intermediates are generated
+synth/${name}/...    - where Vivado synthesis intermediates are generated
+out/...              - where FPGA final products (bitfiles/etc) end up
+out/${name}.bit      - bitfile for project name
+
+Build System Notes
+------------------
+
+1. Declare the name of the module and its sources (.v, .sv, .hex):
+
+MODULE_NAME := ...  
+MODULE_SRCS := ...
+
+2. invoke the appropriate build rules for the module type:
+
+include build/vivado-bitfile.mk
+  - create Xilinx out/$(MODULE_NAME).bit bitfile 
+  - target device MODULE_PART
+  - required: a top level module named top
+  - to build:  make modulename
+
+include build/verilator-sim.mk 
+  - create Verilator simulation target
+  - required: a top level module named testbench(input clk)
+  - provided: clock signal
+  - to run:  make modulename-vsim
+
+include build/vivado-xsim.mk 
+  - create Vivado Xsim simulation target
+  - required: a top level module named testbench
+  - to run:  make modulename-xsim
+
+Tools
+-----
+build/mkzynq.go      - Generates useful wrappers around Zynq PS7 macro
+
+Customizing for your Install
+----------------------------
+build/init.mk should point to Xilinx Vivado, Xilinx SDK, and Verilator.
+The default setup assumes you installed the 2014.2 version of the Xilinx
+tools under /work/xilinx/... and built verilator under /work/verilator/...
+
+Building Verilator
+------------------
+You can replace /work with some other convenient directory if you like
+(but be sure to update build/init.mk):
+0. install autoconf, bison, flex
+1. cd /work
+2. git clone http://git.veripool.org/git/verilator
+3. cd verilator
+4. autoconf
+5. ./configure
+6. make -j32
+7. you do not need to make install

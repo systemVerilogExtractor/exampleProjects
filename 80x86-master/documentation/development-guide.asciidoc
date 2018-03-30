@@ -1,0 +1,834 @@
+= s80x86 Core Development Guide
+Jamie Iles <jamie@jamieiles.com>
+
+:source-highlighter: coderay
+
+= Developer's Guide
+
+== Building
+
+=== System Requirements
+
+- Docker, tested with version 1.12.1.
+
+=== Quick Start Build
+
+The `scripts/build` script provides everything that is needed to quickly build
+and test the project.  On the first run, the script will build the required
+Docker images from `docker/build/Dockerfile`, configure and build the project
+and run all of the built-in tests.
+
+[source,bash]
+----
+./scripts/build
+----
+
+=== Build Environments
+
+The s80x86 project uses Docker to provide convenient build environments.  This
+means that it is possible to build and test the design on any Linux system
+with Docker, regardless of distribution.  The Docker images used internally
+are all based on Ubuntu 16.04 LTS.
+
+There are two primary build environments:
+
+  - s80x86-build
+  - s80x86-dev
+
+Each build environment has a script in `docker` to enter the container and
+build it if not already built.  A 'ccache' cache is created in
+`_build/.ccache` that persists across container runs to increase build
+performance.
+
+'s80x86-build' is a minimal Ubuntu 16.04 LTS container with the dependencies for
+building the project and running the tests.  This environment runs everything
+as the current user's uid/gid to preserve file permissions outside of the
+container and bind-mounts the project directory into `/build`.  The
+'s80x86-dev' container is intended for developing the project itself and
+includes extra packages and convenience scripts to make developing easier.
+Unlike the 's80x86-build' container, this container bind mounts `/home` from
+the host into the container for convenience and includes packages like GTKWave
+for viewing waveforms.  It is recommended to use the Docker build environments
+for all builds and developments as those are used for the baseline development
+and verification.
+
+=== CI Build Scripts
+
+Several build scripts are included suitable for use in a continuous
+integration environment.
+
+*scripts/ci/unittest* builds the project from scratch and then runs all of the
+unit tests, producing JUnit XML suitable for importing into the CI test runner
+history.
+
+*scripts/ci/gcov-coverage* performs the same steps as `scripts/ci/coverage`
+but produces Cobertura compatible coverage information that can be read into
+Jenkins or other CI systems supporting this format.
+
+=== Build Configurations
+
+The CMake based build system supports the following build configurations and
+can be selected by passing `-DCMAKE_BUILD_TYPE=`'CONFIGURATION' to `cmake`.
+
+*Release* is optimized for performance, no debug information.
+
+*Debug* enables debug information in all C/{cpp} executables, and tracing of
+Verilog models which will write VCD files for each test run.
+
+*Coverage* builds everything for coverage including {cpp} and Verilog.
+
+=== Configuration Options
+
+There are some CMake configuration options that control features:
+
+  - *-DS80X86_TRAP_ESCAPE* controls whether the escape fault is taken on an
+  escape opcode.  This defaults to off for DOS compatibility in which case
+  escape opcodes act like a NOP.
+  - *-DS80X86_PSEUDO_286* causes bits 15:12 of the flags register to be
+  cleared which will trick most CPU detection routines into identifying a 286
+  compatible CPU allowing many real-mode 286-only applications to run - most
+  286 real-mode applications depend on the instructions that were also added
+  in the 80186 rather than the 80286 protected mode capabilities.
+
+== Simulator
+
+The simulator can run either the software simulation (SoftwareCPU) or the RTL
+model (RTLCPU).  Typing `^]` will cause the simulator to exit.
+
+----
+Options:
+  -h [ --help ]         print this usage information and exit
+  -b [ --backend ] arg  the simulator backend module to use, either SoftwareCPU
+                        or RTLCPU, default SoftwareCPU
+  -r [ --restore ] arg  restore file to load from
+  -s [ --save ] arg     save file to write from
+  --bios arg            the bios image to use
+  --diskimage arg       the boot disk image
+----
+
+The save and restore functionality are a useful tool for debugging - the
+entire simulation state can be saved at exit and restored later making it
+possible to checkpoint once the system is in a known state and then repeatedly
+debug without waiting for the system to return to the same state.
+Importantly, this is transferable between backends, so it is possible to boot
+the system and run an application with the `SoftwareCPU` and then exit and
+restart with the `RTLCPU` to greatly reduce time taken to get to the
+interesting debug point.
+
+== Microarchitecture
+
+The core has a loosely coupled three stage pipeline consisting of instruction
+fetch, instruction decode and execution.  The prefetch stage has an 8 byte
+queue which feeds into a hardware instruction decoder that fills a 4 deep
+fully decoded instruction queue.
+
+Deviating from the 80186, the hardware decoder generates an invalid opcode
+trap when an instruction exceeds 15 bytes in length.  This is not a valid
+16-bit encoding and can only be reached with multiple redundant prefixes.
+
+== Microcode
+
+The microcode is stored in `rtl/microcode` where microcode files have the
+`.us` suffix.  The microassembler first passes these files through the C
+preprocessor to allow inclusion of other files and creating macros.
+
+=== Directives
+
+Directives are used to provide information to the microassembler about
+microcode layout without actually generating microinstructions.
+
+.Microassembler Directives
+[cols="3,7"]
+|===
+| Name | Description
+| .opcode NUM
+| The `.opcode NUM` directive tells the microassembler to insert the next
+  microinstruction at address `NUM` in the microprogram.  This is used for the
+  first 256 opcodes so that efficient dispatch can be performed by jumping to
+  the address corresponding to the value of the opcode.
+| .auto_address
+| Returns the address assignment to automatically assigned addresses after
+  using the `.opcode` directive.
+|===
+
+=== Microinstruction Fields
+
+==== Jumps
+
+.Microcode Jump Types
+[cols="3,7"]
+|===
+| Name | Description
+| jmp_rm_reg_mem LABEL a| tells the microassembler to generate a jump that will
+jump to the label if the Mod R/M decoder indicates a register operand in the
+R/M field and the label + 1 if the R/M field encodes a memory operand.  For
+example:
+
+[source,asm]
+----
+    jmp_rm_reg_mem foo_reg;
+foo_reg:
+    next_instruction;
+foo_mem:
+    next_instruction;
+----
+
+will jump to `foo_reg` if the R/M operand is a register operand and `foo_mem`
+if the R/M operand is a memory operand.  The two microinstructions must be
+adjacent with the register based instruction appearing first.
+
+| jmp_opcode | Takes the value of the opcode that was fetched and jumps to
+  that address as an absolute value, used in combination with the `.at`
+  directive to implement opcodes.
+
+| jmp_dispatch_reg LABEL | Using the reg field of the mod r/m byte, jump to
+  the target address + the value of the reg field.  Used for implementing
+  different instructions that share the same opcode.
+
+| jmp_if_not_rep LABEL | Jump to the target address if the string instruction
+  does not have a rep prefix, otherwise continue execution at the next
+  incremented address.  Only valid on string instructions that may be combined
+  with a rep prefix.
+
+| jmp_if_zero LABEL | Jump to the target address if the Z flag is set,
+  otherwise continue with the adjacent instruction.  Note that this uses the
+  flags register and not the combinational flags output of the current ALU
+  operation.
+
+| jmp_rb_zero LABEL | Jump to the target address if RB value is zero,
+  otherwise continue with the adjacent instruction.
+
+| jmp_if_rep_not_taken LABEL | Check the condition for the current rep prefix
+  and jump to the target if the termination condition is not met, otherwise
+  execute the adjacent instruction.  Only valid when there is a rep prefix
+  present.
+
+| jmp_if_taken LABEL | Jump to the target if the jump instruction has the
+  condition met, otherwise continue with the adjacent instruction.  This is
+  only valid for jump instructions, and INTO.
+
+| jmp_loop_done LABEL | Jump to the target if loop has completed.  The loop
+  counter is loaded from the 5 MSB's of the immediate and decremented on each
+  iteration.  This is only used for the `enter` instruction.
+
+| jmp LABEL | An unconditional jump, will always transfer control to LABEL.
+|===
+
+=== Data Sources
+
+.Microcode Data Sources
+[cols="3,7"]
+|===
+| Name | Description
+| ra_sel | Which general purpose register to fetch for RA.  Note that register
+  fetches have a single cycle latency.  Only valid when `ra_modrm_rm_reg` is
+  not set.
+| rb_cl | Set to use the value of `CL` for RB after a single cycle of latency,
+  used primarily for shifts.
+| segment | Set the default segment for the memory operation or segment
+  register read.  This is the default segment and may be overriden with a
+  segment override prefix unless `segment_force` is also set.
+| a_sel a|
+  Selects which operand source to use for the internal A bus:
+
+    - RA: the fetched RA GPR value.
+    - IP: the instruction pointer of the next instruction.
+    - MAR: the contents of the memory address register.
+    - MDR: the contents of the memory data register.
+| b_sel a|
+  Selects which operand source to use for the internal B bus:
+
+    - RB: the fetched RB GPR value.
+    - IMMEDIATE: an immediate value, either from the immediate reader or from
+    the constant pool if a microinstruction defined constant is being used.
+    - SR: the fetched segment register value.
+    - TEMP: the contents of the temporary register.
+| immediate | The immediate constant to use.  This forms a constant pool in
+  the microcode and can be used for operations such as fetching exception
+  handler addresses, incrementing/decrementing pointers etc.
+| mar_wr_sel a| Selects the source of the value to be written to the memory
+  address register:
+
+    - EA: the effective address calculated by the mod r/m decoder.
+    - Q: the Q bus driven by the ALU.
+|===
+
+=== Control Signals
+
+.Microcode Control Signals
+[cols="3,7"]
+|===
+| Name | Description
+| next_instruction | Ends processing of the current instruction, will check
+  for pending interrupts, jump to the instruction dispatch address, update
+  CS:IP and reset any intermediate state.
+| mar_write | Write the value of the `mar_wr_sel` source into the memory
+  address register.
+| mdr_write | Write the value of the ALU output into the memory data register.
+| mem_read | Perform a memory access with the specified segment and memory
+  address register value, reading into the memory data register.  Note that
+  the segment register must have had the fetch initiated in the previous
+  instruction and should be held for the duration of the access.  This field
+  will cause the microsequencer to stall until the access is complete.  The
+  `width` field will specify the size of the access.
+| mem_write | Perform a memory write, writing the contents of the memory data
+  register to the address specified by the fetched segment and the memory
+  address register.  As with `mem_read`, the segment must have had the fetch
+  initiated in the previous instruction and held for the duration of this
+  instruction.
+| segment_force | When used in combination with the `segment` field, this will
+  force that segment to be used unconditionally, ignoring any segment override
+  prefix.
+| alu_op | The ALU operation to execute, see
+  "scripts/microassembler/microasm/types.py" for a full list of operations.
+| update_flags a| A list of flags that should be written when performing an ALU
+  operation.  If not specified, no flags will be update.  For example:
+
+[source,asm]
+----
+    alu_op ADD, update_flags CF OF ZF AF
+----
+
+will update the carry, overflow, zero and adjust flags to the result of the
+ALU operation.
+| rd_sel_source a| The source of the destination register number:
+
+  - MODRM_REG: use the reg field of the mod r/m byte as the destination
+  register.
+  - MODRM_RM_REG: use the rm field of the mod r/m byte as the destination
+  register.
+  - MICROCODE_RD_SEL: use the rd_sel field of the instruction to select the
+  destination register.
+
+| reg_wr_source a| Selects which result should be written to the destination
+  register:
+
+  - Q: the result of the ALU operation.
+  - QUOTIENT: the quotient of a division operation.
+  - REMAINDER: the remainder of a division operation.
+
+| tmp_wr_en | Set to write the output of the ALU into the temporary register.
+| tmp_wr_sel a| Select the source of the temporary register write:
+
+  - Q_LOW: the low 16-bits of the ALU output by default.
+  - Q_HIGH: the high 16-bits of the ALU output, only used for 16x16
+  multiplications.
+
+| width | Selects the width of the operation.  Defaults to 16-bit, but "width
+  W8" will perform byte operations for register read/write, memory read/write,
+  immediate fetch and ALU operations.  "width WAUTO" will infer the width from
+  the opcode, where bit 0 being set indicates a 16-bit operation.
+| load_ip | Causes the ALU result to be used as the new IP to be taken when
+  the next instruction is executed.
+| io | Combined with `mem_read`/`mem_write` to indicate that the operation
+  should use the I/O address space.  This will cause the segment to be ignored
+  and the io pin to be asserted for the duration of this microinstruction.
+| ext_int_inhibit | Used at the end of a microprogram, this flag indicates
+  that the microsequencer should not check for interrupts after this
+  instruction.  This is used for instructions like `mov ss, bx` where the
+  following instruction would set `sp`.
+| ext_int_inhibit | Used in string instructions to indicate that interrupts
+  may be serviced at this point.
+|===
+
+== Debug
+
+The microsequencer provides a very simple way to implement on-chip debug.  The
+core has a number of signals to interface between a debug controller
+(typically JTAG) and the microsequencer.  These signals are all in the core
+clock domain and will require synchronization with a debug controller in a
+different clock domain.
+
+The debug mechanism works by putting the core into a halt mode where it will
+perform a tight loop in the microsequencer at which point other debug
+operations can be issued.  Operations are issued by running a microprogram at
+a known address allowing more debug procedures to be added easily.  To perform
+a debug operation, the debug controller first halts the core by raising
+`debug_seize` and waits for the core to enter the halted state with
+`debug_stopped` asserted which will be at the end of the current microprogram.
+Once stopped, the controller can write data to the temporary register if
+required with `debug_wr_val` and `debug_wr_en` and then run the debug procedure
+by writing the procedure address to `debug_addr` and asserting `debug_run` for
+a single clock cycle.
+
+=== Debug Signals
+
+.Debug Interface Signals
+[cols="2,1,1,3",options="header"]
+|===
+| Name | Width | Direction | Description
+
+| debug_stopped | 1 | output | Asserted when the core is in a debug halt and
+  is ready for debug operations.  The debug controller must not issue any
+  operations when `debug_stopped` is not asserted.
+| debug_seize | 1 | input | Asserted by the controller to request that the core
+  enters debug mode.  This may be deasserted once `debug_stopped` has been
+  asserted and then the run procedure executed to continue normal operation.
+| debug_addr | 8 | input | The address of the debug procedure to execute, must
+  be written at the same time as `debug_run`.  The core will run the procedure
+  at 100h + `debug_addr`.
+| debug_run | 1 | input | Asserted by the debug controller to begin the debug
+  procedure specified in `debug_addr`.
+| debug_wr_val | 16 | input | Asserted by the debug controller to write the
+  value in `debug_wr_val` into the temporary register.
+| debug_wr_en | 1 | input | Asserted by the debug controller to write
+  `debug_wr_val` into the temporary register.
+|===
+
+=== Control and Reserved Debug Procedures
+
+  - *0x00*: resume execution.  If `debug_seize` is held high then this will
+  single-step one instruction, otherwise run indefinitely until seized.
+  - *0x01 - 0x02: reserved for internal use, execution will yield undefined
+  behaviour.*
+
+=== Data Transfer Debug Procedures
+
+These debug procedures are used to transfer data between the debug controller
+and the core.
+
+.Data Transfer Debug Procedures
+[cols=3*,options="header"]
+|===
+| Program Number
+| Source
+| Destination
+| 0x03 | `AX` | `debug_val`
+| 0x04 | `CX` | `debug_val`
+| 0x05 | `DX` | `debug_val`
+| 0x06 | `BX` | `debug_val`
+| 0x07 | `SP` | `debug_val`
+| 0x08 | `BP` | `debug_val`
+| 0x09 | `SI` | `debug_val`
+| 0x0a | `DI` | `debug_val`
+| 0x0b | `ES` | `debug_val`
+| 0x0c | `CS` | `debug_val`
+| 0x0d | `SS` | `debug_val`
+| 0x0e | `DS` | `debug_val`
+| 0x0f | `IP` | `debug_val`
+| 0x10 | `FLAGS` | `debug_val`
+| 0x11 | `debug_val` | `IP`
+| 0x12 | `debug_val` | `FLAGS`
+| 0x13 | `debug_val` | `AX`
+| 0x14 | `debug_val` | `CX`
+| 0x15 | `debug_val` | `DX`
+| 0x16 | `debug_val` | `BX`
+| 0x17 | `debug_val` | `SP`
+| 0x18 | `debug_val` | `BP`
+| 0x19 | `debug_val` | `SI`
+| 0x1a | `debug_val` | `DI`
+| 0x1b | `debug_val` | `ES`
+| 0x1c | `debug_val` | `CS`
+| 0x1d | `debug_val` | `SS`
+| 0x1e | `debug_val` | `DS`
+| 0x1f | `debug_val` | `MAR`
+| 0x20 | `debug_val` | `MDR`
+| 0x21 | mem8[DS:MAR] | `debug_val`
+| 0x22 | mem16[DS:MAR] | `debug_val`
+| 0x23 | MDR | mem8[DS:MAR]
+| 0x24 | MDR | mem16[DS:MAR]
+| 0x25 | io8[MAR] | `debug_val`
+| 0x26 | io16[MAR] | `debug_val`
+| 0x27 | MDR | io8[MAR]
+| 0x28 | MDR | io16[MAR]
+|===
+
+[NOTE]
+====
+All memory transfers implicitly use DS as the segment.  To write outside of
+the current data segment, save the value of DS, write it with the new value,
+perform the access and then restore DS.
+====
+
+== FPGA JTAG
+
+The DE0-Nano and DE0-CV boards use the Altera Virtual JTAG to implement a
+debug bridge between the development machine and the FPGA design.  This is not
+a compliant JTAG TAP, but provides a reference implementation of implementing
+a debug interface for the core.
+
+The implementation uses a 2 bit instruction register and variable length data
+register.
+
+.JTAG Instruction Register Definitions
+[cols=2*,options="header"]
+|===
+| Register
+| Name
+| 2'b00 | IDCODE
+| 2'b01 | STATUS_CONTROL
+| 2'b10 | DEBUG_VALUE
+| 2'b11 | RUN_PROCEDURE
+|===
+
+=== IDCODE
+
+The IDCODE register is a 32-bit register containing the device ID code.  This
+register is read-only, values shifted in are ignored.
+
+=== STATUS_CONTROL
+
+.JTAG STATUS_CONTROL Data Register
+[cols="2,1,1,3",options="header"]
+|===
+| Field
+| Bits
+| Access
+| Description
+| RUN | [0:0] | R/W | Returns the current execution state of the CPU, "1"
+indicates that the core is executing in normal mode.  Write a "0" to enter
+debug mode, polling this bit until it reflects that the core has stopped.  To
+restart the core, write a "1", and then run debug procedure "0".
+| RESET | [1:1] | R/W | Core reset control, write "1" to start a reset, write
+"0" to clear.
+| RESERVED | [15:2] | RO | Reserved for future use.
+| WRITE_ENABLE | [16] | WO | Write as "1" to write the value shifted in into
+the core, otherwise the shifted value will be discarded.
+|===
+
+=== DEBUG_VALUE
+
+.JTAG DEBUG_VALUE Data Register
+[cols="2,1,1,3",options="header"]
+|===
+| Field
+| Bits
+| Access
+| Description
+| VALUE | [15:0] | RW | The value to be written to/read from the debug
+controller.
+| WRITE_ENABLE | [16] | R/W | For the value shifted in, if this is set to "1",
+then the VALUE will be written into the debug controller, otherwise discarded.
+For the value shifted out, if "1", then the VALUE field is valid.  When
+reading, this bit should be polled until it returns "1".
+|===
+
+=== RUN_PROCEDURE
+
+.JTAG RUN_PROCEDURE Data Register
+[cols="2,1,1,3",options="header"]
+|===
+| Field
+| Bits
+| Access
+| Description
+| VALUE | [7:0] | WO | The debug procedure to run.  This is a write-only
+field.
+|===
+
+== FPGA Reference Designs
+
+Both reference designs feature 1MB of SDRAM with other peripherals mapped over
+the top.  Additionally, a write-back cache on the frontend of the SDRAM boosts
+performance of external memory accesses and is transparent to the CPU.  The
+cache features a line size of 16 bytes to allow easy filling from SDRAM with
+an 8 word burst and fills from the critical word first.  Accesses to the BIOS
+and video RAM are not cached as they utilize single cycle accesses and the
+video RAM needs to be coherent.
+
+=== DE0-Nano
+
+To build the DE0-Nano design, configure the build with "-DBUILD_DE0_NANO=ON".
+The build target "de0-nano" will build the FPGA, and "de0-nano-program" will
+load the design into the FPGA via the Altera USB Blaster.
+
+.DE0-Nano Memory Map
+[cols="1,1,4",options="header"]
+|===
+| Start | End | Description
+| 20'h0000 | 20'hfffff | SDRAM
+|===
+
+.DE0-Nano IO Port Map
+[cols="1,1,4",options="header"]
+|===
+| Address | Width (bits) | Description
+| 16'h0020 | 8 | PIC command register
+| 16'h0021 | 8 | PIC data register
+| 16'h0040 | 8 | PIT channel 0 data register
+| 16'h0043 | 8 | PIT control register
+| 16'hffe0 | 8 a| Mouse data register:
+
+  - [7:0]: read data from the mouse, write command data
+
+| 16'hffe1 | 8 a| Mouse status register:
+
+  - [7]: write to reset
+  - [6:3]: reserved
+  - [2]: transmitter busy
+  - [1]: unread receive error
+  - [0]: receive FIFO not empty
+
+| 16'hffec | 16 a| BIOS control register:
+
+  - [0]: BIOS ROM enabled.
+
+| 16'hfff0 | 16 a| SPI control register:
+
+  - [15:10]: reserved.
+  - [9]: CS activate.
+  - [8:0]: clock divider.
+| 16'hfff2 | 16 a| SPI transfer register:
+
+  - [15:9]: reserved.
+  - [8]: transfer busy.
+  - [7:0]: transfer data.
+
+Writing to this register will initiate a one byte transfer.  The CPU should
+then poll until bit 8 is clear at which point [7:0] will contain the received
+data.
+
+| 16'ffff6 | 8 a| IRQ test register:
+  - [7]: write a 1 to raise NMI, 0 to clear NMI.
+  - [6:0]: write a 1 to raise interrupt N.
+
+| 16'hfffa | 8 a| UART data register, write to transmit data, read to fetch
+the received data.
+| 16'hfffb | 8 a| UART status register:
+
+  - [7:2]: reserved.
+  - [1]: transmitter busy.
+  - [0]: receive data ready, cleared once the data register is read.
+
+| 16'hfffc | 16 a| SDRAM configuration register:
+
+  - [15:1]: reserved.
+  - [0]: SDRAM configuration complete.  The SDRAM should not be accessed until
+  this bit is set.
+
+| 16'hfffe | 16 | LED register, writing will set the LED registers on the
+  board, a 1 is enabled, 0 is disabled.
+|===
+
+=== DE0-CV
+
+To build the DE0-CV design, configure the build with "-DBUILD_DE0_CV=ON".
+The build target "de0-cv" will build the FPGA, and "de0-cv-program" will
+load the design into the FPGA via the Altera USB Blaster.
+
+.DE0-CV Memory Map
+[cols="1,1,4",options="header"]
+|===
+| Start | End | Description
+| 20'h0000 | 20'hfffff | SDRAM
+|===
+
+.DE0-CV IO Port Map
+[cols="1,1,4",options="header"]
+|===
+| Address | Width (bits) | Description
+| 16'h0020 | 8 | PIC command register
+| 16'h0021 | 8 | PIC data register
+| 16'h0040 | 8 | PIT channel 0 data register
+| 16'h0043 | 8 | PIT control register
+| 16'h0060 | 8 a| PS/2 data register:
+
+  - [7:0]: read the head of the FIFO, 0 if no bytes available.  Write to
+  transmit a byte, must only be written when bit 2 of the status register is
+  clear.
+
+| 16'h0061 | 8 a| PS/2 control/status register:
+
+  - [7]: RX FIFO reset.
+  - [6:3]: reserved
+  - [2]: transmit in progress, cleared when the transmitter is idle.
+  - [1]: a byte with a parity error was received and discarded.  Cleared on
+  read.
+  - [0]: receive FIFO not empty.
+
+| 16'hffec | 16 a| BIOS control register:
+
+  - [0]: BIOS writable.
+
+| 16'hfff0 | 16 a| SPI control register:
+
+  - [15:10]: reserved.
+  - [9]: CS activate.
+  - [8:0]: clock divider.
+| 16'hfff2 | 16 a| SPI transfer register:
+
+  - [15:9]: reserved.
+  - [8]: transfer busy.
+  - [7:0]: transfer data.
+
+Writing to this register will initiate a one byte transfer.  The CPU should
+then poll until bit 8 is clear at which point [7:0] will contain the received
+data.
+
+| 16'ffff6 | 8 a| IRQ test register:
+  - [7]: write a 1 to raise NMI, 0 to clear NMI.
+  - [6:0]: write a 1 to raise interrupt N.
+
+| 16'hfffa | 8 a| UART data register, write to transmit data, read to fetch
+the received data.
+| 16'hfffb | 8 a| UART status register:
+
+  - [7:2]: reserved.
+  - [1]: transmitter busy.
+  - [0]: receive data ready, cleared once the data register is read.
+
+| 16'hfffc | 16 a| SDRAM configuration register:
+
+  - [15:1]: reserved.
+  - [0]: SDRAM configuration complete.  The SDRAM should not be accessed until
+  this bit is set.
+|===
+
+=== BIOS
+
+The reference BIOS is a non-compliant BIOS for demonstration purposes.  The
+bios is built with the Mentor Graphics `ia16-elf` toolchain which is installed
+in the standard docker images.  The BIOS uses an SD card to emulate the floppy
+drive and will boot the first sector of whatever is written to that SD card.
+
+The BIOS is loaded at "f000:e000", and the BIOS stack grows down from
+"f000:dffe".  The UART is used for video and keyboard services.
+
+== RTL Tests
+
+The RTL tests are written in {cpp}, using Verilator to create {cpp} models of the
+Verilog.  For example, given a synchronous Fifo, the Verilator model can be
+created using the Verilator CMake package:
+
+[source,cmake]
+----
+include(Verilator)
+add_library(verilator STATIC ${VERILATOR_LIB_SOURCES})
+verilate(Fifo ${CMAKE_CURRENT_SOURCE_DIR}/Fifo.v)
+----
+
+This will generate a `verilator` library containing the common Verilator
+support functions, run Verilator on `Fifo.v` and generate a `VFifo` library
+and `VFifo.h` header for inclusion in the test code.  A templated wrapper
+'VerilogTestbench' in `VerilogTestbench.h` provides convenient methods for
+resetting and clocking the device under test along with running deferred and
+clock edge events, tracing and coverage.
+
+The device under test can then be encapsulated inside a class and used for
+writing tests with Google Test.  For example, wrapping the Verilog model:
+
+[source,c++]
+----
+#include <VFifo.h>
+
+#include "VerilogTestbench.h"
+
+class FifoTestbench : public VerilogTestbench<VFifo> {
+public:
+    FifoTestbench(VFifo *dut);
+    void push(uint32_t val);
+    uint32_t pop();
+};
+
+FifoTestbench::FifoTestbench(VFifo *dut)
+    : VerilogTestbench<VFifo>(dut)
+{
+    dut->wr_en = 0;
+    dut->wr_data = 0LU;
+    dut->rd_en = 0;
+}
+
+void FifoTestbench::push(uint32_t val)
+{
+    dut->wr_data = val;
+    dut->wr_en = 1;
+    cycle();
+    dut->wr_en = 0;
+}
+
+uint32_t FifoTestbench::pop()
+{
+    dut->rd_en = 1;
+    cycle();
+    dut->rd_en = 0;
+
+    return dut->rd_data;
+}
+----
+
+Then a test can be written to exercise it:
+
+[source,c++]
+----
+TEST(Fifo, ResetClears)
+{
+    FifoTestbench tb;
+
+    for (uint32_t m = 0; m < 4; ++m)
+        tb.push(m);
+
+    ASSERT_FALSE(tb.dut->empty);
+    tb.reset();
+    ASSERT_TRUE(tb.dut->empty);
+}
+----
+
+More complex tests that have deferred events such as reading from memory can
+be written by adding events on positive+negative clock edges and running after
+a number of cycles.  `tests/rtl/TestPrefetch.cpp` uses a number of these
+concepts.  With the right abstractions it can be possible to type-parameterize
+these test cases to run against pure software simulations and Verilog models.
+
+= Programmer's Reference
+
+== Interrupts
+
+The CPU core implements the following exceptions.  Traps are handled after the
+instruction and the saved CS:IP points to the next instruction, faults are
+restartable and the saved CS:IP points to the instruction that caused the
+fault and so can be restarted.  The core correctly handles multiple prefix
+bytes during an interrupted string instruction.
+
+.Exceptions
+[cols="2,2,1,6",options="header"]
+|===
+| Name | Type | Number | Description
+| Divide-by-zero | Trap | 0 | Raised when division by zero occurs or the result of
+the division operation does not fit in the range of the destination register.
+| Single-step | Trap | 1 | Raised when `TF` is set and the core steps an instruction.
+| NMI | Interrupt | 2 | Non-maskable interrupt, raised when the `nmi` signal
+has a negative to positive edge.
+| INT | Interrupt | 3 | Normal interrupt, raised by the `int3` instruction.
+| Overflow | Trap | 4 | Overflow, raised by an `into` instruction if `OF` is
+set.
+| Bound | Trap | 5 | Bounds check, raised when the `bound` instruction detects
+an out-of-bounds address.
+| Invalid Opcode | Trap | 6 a| Raised when an invalid opcode is executed.
+Invalid opcodes do not include unimplemented opcodes or undocumented opcodes.
+The opcodes that raise this trap are:
+
+  * 8'h0f
+  * 8'h63
+  * 8'h64
+  * 8'h65
+  * 8'h66
+  * 8'h67
+  * 8'hf1
+  * 8'hff or 8'hfe with /reg=7
+  * 8'h62 (bound) with a register operand
+
+| Escape | Fault | 7 | Escape opcode, this will always be raised on an `esc`
+instruction as no coprocessors are supported.
+|===
+
+== Instructions
+
+The following tables list all of the supported instructions along with sizes
+and timings for each.  The timings are measured using the RTL simulation under
+the following conditions:
+
+  * The prefetch FIFO contains the instruction and is padded with other bytes
+    to be full.
+  * The instruction and data busses are connected to an arbiter that gives
+    priority to data accesses.
+  * Memory accesses take a single cycle to complete.
+
+Instructions with a MOD R/M byte require an additional cycle to calculate the
+effective address.
+
+Prefix bytes add one byte to the instruction length, and for conflicting
+prefixes such as multiple segment overrides, the last prefix is used.
+
+<<<
+
+include::instructions.asciidoc[]
